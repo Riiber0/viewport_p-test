@@ -25,17 +25,22 @@ import numpy as np
 from utils import *
 from model import CNN_GRU, baseModel, CNN_LSTM
 import glob
+from graph_navagation import NavigationGraphPredictor
+from flare import FlareLinearRegressionPredictor, FlareRidgeRegressionPredictor
+from get_preds import get_grap_pred, get_flare_pred, get_model_pred, get_static_pred
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
+GRAPH_PATH = "./graphs/"
 MODELS_PATH = './models/'
 TILE_RESULT_PATH = './tile_result/'
 
-
-def test_tile_miss(test_data, predictions, pred_time, entropy_df):
+def test_tile_miss(test_data, predictions, pred_time, entropy_df, model_name):
     """
         test_data
     """
+
+    results = []
 
     end = len(test_data)
     cur = 0
@@ -51,52 +56,65 @@ def test_tile_miss(test_data, predictions, pred_time, entropy_df):
     ]
     bar = progressbar.ProgressBar(widgets=widgets, max_value=end, end='\n')
 
-    pred_index = 0
-    model_sum = deque()
+    model_sum = []
+    seg_time = pred_time
+    segments_num = int(60/seg_time)
     for (v_id, u_id), session in test_data.groupby(['v_id', 'u_id']):
+        session_preds = predictions[
+            (predictions['v_id'] == v_id) &
+            (predictions['u_id'] == u_id)
+        ]
         video_buffer = {}
-        video_buffer[1] = [i for i in range(1,201)]
-
         segment_tiles = {}
-        segment_tiles[1] = []
 
         pred_tiles = []
         total_tile_miss = 0
         session_sum = {}
 
-        for i in range(2, 16):
+        for i in range(1, segments_num + 1):
             session_sum['tile_miss_'+str(i)] = 0
             video_buffer[i] = []
             segment_tiles[i] = []
 
+        video_buffer[1] = list(range(1, 201))
+
         trace_class = entropy_df[(entropy_df['u_id'] == u_id) & (entropy_df['v_id'] == v_id)]['classificacao']
         #print(f"v_id:{v_id}, u_id:{u_id}")
+        #print(trace_class)
         #print(trace_class.iloc[0])
         trace_class = trace_class.iloc[0]
 
         for index, row in session.iterrows():
+            pred_row = session_preds[np.isclose(
+                session_preds['playback_time'], 
+                row['playback_time'], atol=1e-6)].head(1)
             tile_miss = 0
             download_size = 0
             fov_tiles = 0
             wasted_tiles = 0
-            if row['sequence']:
+            #if row['sequence']:
                 #pred = m.predict(np.array([row['sequence']]), batch_size=1, verbose=0)[0]
                 #print(f"{pred} - {predictions[pred_index]}")
-                """mudado para ter tiles prontos"""
                 #pred = predictions[pred_index]
                 #pred_tiles = get_viewport_tiles(pred[0], pred[1], pred[2], pred[3])
-                pred_tiles = predictions[pred_index]
-                pred_index+=1
 
-            current_seg = int(row['playback_time']//4 + 1)
-            pred_seg = int((row['playback_time']+pred_time)//4 + 1)
-            if pred_seg > 15:
-                break
+            current_seg = int(np.floor(row['playback_time'] / seg_time)) + 1
+            pred_seg = int(np.floor((row['playback_time'] + pred_time) / seg_time)) + 1
 
-            tiles_to_download = [tile for tile in pred_tiles if tile not in video_buffer[pred_seg]]
+            if not pred_row.empty:
+                pred_tiles = pred_row['pred_tiles'].iloc[0]
+            else:
+                pred_tiles = []
+
+            if pred_seg > segments_num:
+                tiles_to_download = []
+            else:
+                tiles_to_download = [tile for tile in pred_tiles if tile not in video_buffer[pred_seg]]
+                video_buffer[pred_seg] += tiles_to_download
+                video_buffer[pred_seg].sort()
+
             download_size = len(tiles_to_download)
-            video_buffer[pred_seg] += tiles_to_download
-            video_buffer[pred_seg].sort()
+
 
             #print(f"{index}: current segment = {current_seg}, playback time = {row['playback_time']}")
             #print(get_viewport_tiles(row['target'][0], row['target'][2]))
@@ -108,8 +126,7 @@ def test_tile_miss(test_data, predictions, pred_time, entropy_df):
             view_port_tiles = row['tiles']
 
             fov_tiles = len(view_port_tiles)
-            segment_tiles[current_seg] += set(view_port_tiles) - set(segment_tiles)
-            wasted_tiles = len(set(video_buffer[current_seg]) - set(segment_tiles[current_seg]))
+            segment_tiles[current_seg] += list(set(view_port_tiles) - set(segment_tiles[current_seg]))
             """
             if row['playback_time'] == 4.0:
                 print('====================')
@@ -131,7 +148,9 @@ def test_tile_miss(test_data, predictions, pred_time, entropy_df):
 
                 tile_miss = len(missed_tiles)
 
-                video_buffer[current_seg] += list(missed_tiles)
+                video_buffer[current_seg] = list(set(video_buffer[current_seg]) | missed_tiles)
+
+            wasted_tiles = len(set(video_buffer[current_seg]) - set(segment_tiles[current_seg]))
 
             line_result = {'u_id': u_id,
                             'v_id': v_id,
@@ -157,15 +176,55 @@ def test_tile_miss(test_data, predictions, pred_time, entropy_df):
         session_sum['trace_class'] = trace_class
                         
         results.append(session_sum)
-        model_df = pd.DataFrame(model_sum)
-        model_df.to_csv(TILE_RESULT_PATH+model_name+str(int(pred_time*10))+'.csv')
+
+    model_df = pd.DataFrame(model_sum)
+    #model_df.to_csv(TILE_RESULT_PATH+model_name+str(int(pred_time*10))+'.csv')
+    model_df.to_csv(f'{TILE_RESULT_PATH}{model_name}_{int(pred_time*10)}.csv')
 
     bar.finish()
     return results
 
 if __name__ == '__main__':
-    df = pd.read_csv('dataset_processed.csv')
-    df = df[(df['v_id'] == 1) & (df['u_id'] == 1)]
+    test_df = pd.read_csv('test_data.csv')
+    entropy_df = pd.read_csv('entropy_classified.csv')
 
-    test_data = prepare_test_data(df)
+    test_data = prepare_test_data(test_df)
+
+
+    pred_times = [0.5, 1.0, 1.5, 2.0, 2.5]
+
+    for pw in pred_times:
+        predictions = get_static_pred(test_df)
+        test_tile_miss(test_data, predictions, pw, entropy_df, 'static_pred')
+
+    for pw in pred_times:
+        predictions = get_grap_pred(pw, test_df)
+        test_tile_miss(test_data, predictions, pw, entropy_df, 'graph_navagation')
+
+    for pw in pred_times:
+        predictions = get_flare_pred(pw, test_df, True)
+        test_tile_miss(test_data, predictions, pw, entropy_df, 'linear_regression')
+
+        predictions = get_flare_pred(pw, test_df, False)
+        test_tile_miss(test_data, predictions, pw, entropy_df, 'ridge_regression')
+
+    model_files = sorted(glob.glob('models_all/*.h5'))
+    for model_path in model_files:
+        model_name = os.path.basename(model_path).replace('.h5', '')
+        pw = float(int(model_name.split('_')[2]) * 0.5)
+        model_name = model_name.split('_')[0] + '_' + model_name.split('_')[1]
+
+        use_v = True
+        kmov = False
+
+        if 'BASE' in model_name.upper():
+            use_v = False
+
+        if 'KMOV' in model_name.upper():
+            kmov = True
+
+        print(f'{model_name} | {pw} | {use_v}')
+
+        predictions = get_model_pred(pw, test_df, model_path, use_v, kmov)
+        test_tile_miss(test_data, predictions, pw, entropy_df, model_name)
 

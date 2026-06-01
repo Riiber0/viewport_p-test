@@ -1,82 +1,147 @@
 import numpy as np
-
 from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Ridge
+from math import ceil
+from utils import get_degree_from_rad
 
 
-class FlarePredictor:
-    def __init__(
-        self,
-        pw,
-        prediction_points=5,
-        sampling_period=0.1
-    ):
+class BaseFlarePredictor:
 
-        self.pw = pw
+    def __init__(self, history_window, prediction_points, sampling_period=0.1):
+
+        self.history_window = history_window
         self.prediction_points = prediction_points
         self.sampling_period = sampling_period
 
-        self.model = None
+        self.x_history = []
+        self.y_history = []
 
-        if self.pw < 1:
-            self.model = LinearRegression()
-        else:
-            self.model = Ridge(alpha=1)
+        self.model_x = self.create_model()
+        self.model_y = self.create_model()
 
-    def predict(self, series):
-        """
-        Parameters
-        ----------
-        series : list | np.ndarray
-            Série temporal histórica.
+    def create_model(self):
+        raise NotImplementedError
 
-        Returns
-        -------
-        np.ndarray
-            Valores previstos.
-        """
+    def add_sample(self, yaw, pitch):
 
-        series = np.asarray(series)
+        self.x_history.append(float(yaw))
+        self.y_history.append(float(pitch))
 
-        n = len(series)
+        if len(self.x_history) > self.history_window:
+            self.x_history.pop(0)
 
-        # eixo temporal
-        X_train = (np.arange(n).reshape(-1, 1) * self.sampling_period)
+        if len(self.y_history) > self.history_window:
+            self.y_history.pop(0)
 
-        y_train = series
+    def predict(self):
 
-        # treino
-        self.model.fit(X_train, y_train)
+        if len(self.x_history) < self.history_window:
+            return None
 
-        # tempos futuros
-        X_future = (np.arange(n, n + self.prediction_points).reshape(-1, 1) * self.sampling_period)
+        x_pred = self._predict_axis(
+            self.model_x,
+            self.x_history
+        )
 
-        # predição
-        predictions = self.model.predict(X_future)
+        y_pred = self._predict_axis(
+            self.model_y,
+            self.y_history
+        )
 
-        return predictions
+        return x_pred[-1], y_pred[-1]
 
+    def _predict_axis(self, model, history):
+
+        history = np.asarray(history)
+
+        n = len(history)
+
+        X_train = (
+            np.arange(1, n + 1).reshape(-1, 1)
+            * self.sampling_period
+        )
+
+        y_train = history
+
+        model.fit(X_train, y_train)
+
+        X_future = (
+            np.arange(
+                n + 1,
+                n + self.prediction_points + 1
+            ).reshape(-1, 1)
+            * self.sampling_period
+        )
+
+        pred = model.predict(X_future)
+
+        return pred
+
+class FlareLinearRegressionPredictor(BaseFlarePredictor):
+
+    def __init__(self, history_window, prediction_points, sampling_period=0.1):
+
+        super().__init__(history_window, prediction_points, sampling_period)
+
+    def create_model(self):
+        return LinearRegression()
+
+
+class FlareRidgeRegressionPredictor(BaseFlarePredictor):
+
+    def __init__(self, history_window, prediction_points, sampling_period=0.1, alpha=1):
+
+        self.alpha = alpha
+
+        super().__init__(history_window, prediction_points, sampling_period)
+
+    def create_model(self):
+        return Ridge(alpha=self.alpha)
 
 #test
 if __name__ == "__main__":
 
-
-    #LR
     yaw_series = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    pitch_series = [0, 2, 4, 6, 8, 10, 12, 14, 16]
 
-    predictor_lr = FlarePredictor(pw=0.5, prediction_points=5, sampling_period=0.1)
+    history_window = ceil(10 / 2)
 
-    lr_pred = predictor_lr.predict(yaw_series)
+    print("===== LINEAR REGRESSION =====")
 
-    print("LR Prediction:")
-    print(lr_pred)
+    predictor_lr = FlareLinearRegressionPredictor(
+        history_window=history_window,
+        prediction_points=10,
+        sampling_period=0.1
+    )
 
-    #RR
-    yaw_series = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    for yaw, pitch in zip(yaw_series, pitch_series):
+        predictor_lr.add_sample(yaw, pitch)
 
-    predictor_rr = FlarePredictor(pw=2.0, prediction_points=5, sampling_period=0.1)
+    lr_pred = predictor_lr.predict()
 
-    rr_pred = predictor_rr.predict(yaw_series)
+    print("Yaw prediction:")
+    print(lr_pred[0])
 
-    print("\nRR Prediction:")
-    print(rr_pred)
+    print("Pitch prediction:")
+    print(lr_pred[1])
+
+
+
+    print("\n===== RIDGE REGRESSION =====")
+
+    predictor_rr = FlareRidgeRegressionPredictor(
+        history_window=history_window,
+        prediction_points=10,
+        sampling_period=0.1,
+        alpha=0.75
+    )
+
+    for yaw, pitch in zip(yaw_series, pitch_series):
+        predictor_rr.add_sample(yaw, pitch)
+
+    rr_pred = predictor_rr.predict()
+
+    print("Yaw prediction:")
+    print(rr_pred[0])
+    print("Pitch prediction:")
+    print(rr_pred[1])

@@ -3,7 +3,7 @@ import pandas as pd
 import math
 from sklearn.preprocessing import StandardScaler
 
-def sin_convert(pitch_pred_sin, yaw_pred_sin):
+def sin_to_degree(pitch_pred_sin, yaw_pred_sin):
     pitch_rad = math.asin(max(-1.0, min(1.0, pitch_pred_sin)))
     yaw_rad = math.asin(max(-1.0, min(1.0, yaw_pred_sin)))
 
@@ -12,72 +12,89 @@ def sin_convert(pitch_pred_sin, yaw_pred_sin):
 
     return pitch, yaw
 
-def get_viewport_tiles(pitch_sin, pitch_cos, yaw_sin, yaw_cos):
+def sin_to_rad(pitch_pred_sin, yaw_pred_sin):
+    pitch = math.asin(max(-1.0, min(1.0, pitch_pred_sin)))
+    yaw = math.asin(max(-1.0, min(1.0, yaw_pred_sin)))
+
+    return pitch, yaw
+
+def get_degree_from_rad(pitch_rad, yaw_rad):
+
+    pitch = math.degrees(pitch_rad)
+    yaw = math.degrees(yaw_rad)
+
+    return pitch, yaw
+
+def get_viewport_tiles(pitch, yaw):
+
     GRID_COLS = 20
     GRID_ROWS = 10
-    HFOV = 100.0  
-    ASPECT_RATIO = 16/9
-    VIDEO_WIDTH = 1920
-    VIDEO_HEIGHT = 1080
-    VFOV = HFOV / ASPECT_RATIO  
-    
-    #pitch = math.degrees(math.atan2(pitch_sin, pitch_cos))
-    #yaw = math.degrees(math.atan2(yaw_sin, yaw_cos))
-    pitch =  math.degrees(pitch_sin)
-    yaw = math.degrees(yaw_sin)
 
-    # calculate viewport boundaries
+    HFOV = 100.0
+    ASPECT_RATIO = 16 / 9
+
+    VFOV = HFOV / ASPECT_RATIO
+
     yaw_min = yaw - (HFOV / 2)
     yaw_max = yaw + (HFOV / 2)
+
     pitch_min = pitch - (VFOV / 2)
     pitch_max = pitch + (VFOV / 2)
-    
-    # pitch range
+
     pitch_min = max(pitch_min, -90.0)
     pitch_max = min(pitch_max, 90.0)
-    
+
     viewport_segments = []
-    
+
     if yaw_min < -180 and yaw_max <= 180:
         viewport_segments.append((yaw_min + 360, 180.0, pitch_min, pitch_max))
         viewport_segments.append((-180.0, yaw_max, pitch_min, pitch_max))
+
     elif yaw_max > 180 and yaw_min >= -180:
         viewport_segments.append((yaw_min, 180.0, pitch_min, pitch_max))
         viewport_segments.append((-180.0, yaw_max - 360, pitch_min, pitch_max))
+
     elif yaw_min < -180 and yaw_max > 180:
         viewport_segments.append((-180.0, 180.0, pitch_min, pitch_max))
     else:
         viewport_segments.append((yaw_min, yaw_max, pitch_min, pitch_max))
-    
-    tiles = list()
-    
+
+    tiles = []
+
     for y_min, y_max, p_min, p_max in viewport_segments:
+
         u_min = (y_min + 180.0) / 360.0
         u_max = (y_max + 180.0) / 360.0
+
         v_min = (p_min + 90.0) / 180.0
         v_max = (p_max + 90.0) / 180.0
-        
+
         u_min = max(0.0, min(1.0, u_min))
         u_max = max(0.0, min(1.0, u_max))
+
         v_min = max(0.0, min(1.0, v_min))
         v_max = max(0.0, min(1.0, v_max))
-        
+
         col_min = int(u_min * GRID_COLS)
         col_max = int((u_max - 1e-6) * GRID_COLS)
+
         row_min = int(v_min * GRID_ROWS)
         row_max = int((v_max - 1e-6) * GRID_ROWS)
-        
+
         col_min = max(0, col_min)
         col_max = min(GRID_COLS - 1, col_max)
+
         row_min = max(0, row_min)
         row_max = min(GRID_ROWS - 1, row_max)
-        
+
         for col in range(col_min, col_max + 1):
             for row in range(row_min, row_max + 1):
-                tiles.append(row * GRID_COLS + col + 1)
 
-    
-    return sorted(tiles)
+                tile_id = row * GRID_COLS + col + 1
+
+                tiles.append(tile_id)
+
+    return sorted(set(tiles))
 
 def get_viewport_tiles_sin(pitch_pred_sin, yaw_pred_sin):
     GRID_COLS = 20
@@ -222,6 +239,8 @@ def get_viewport_tiles_rad(pitch_rad, yaw_rad):
 
     return sorted(set(tiles))
 
+
+
 def prepare_data(df, target_pitch, target_yaw):
 
     df = df.copy()
@@ -290,7 +309,7 @@ def split_dataset(df, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15):
 
     return train_df, val_df, test_df
 
-def create_temporal_sequences(df, pred_time, use_v=True):
+def create_temporal_sequences(df, pred_time, use_v=True, kmov=False):
     df = df.sort_values(['v_id', 'u_id', 'playback_time']).reset_index(drop=True)
 
     if use_v:
@@ -302,8 +321,10 @@ def create_temporal_sequences(df, pred_time, use_v=True):
     target_cols = ['pitch_pred_sin', 'pitch_pred_cos', 
                    'yaw_pred_sin', 'yaw_pred_cos']
 
-    #seq_len = 40 - pred_time
-    seq_len = 35
+    if kmov:
+        seq_len = 40 - pred_time
+    else:
+        seq_len = 35
     
     x_sequences = []
     y_targets = []
@@ -382,6 +403,8 @@ def prepare_test_data(df):
         new_row = {'v_id': row['v_id'],
                    'u_id': row['u_id'],
                    'playback_time': row['playback_time'],
+                   'pitch': row['pitch'],
+                   'yaw': row['yaw'],
                    'tiles': tiles
                    }
         test_data.append(new_row)
