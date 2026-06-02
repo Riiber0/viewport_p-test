@@ -3,6 +3,12 @@ import pandas as pd
 import math
 from sklearn.preprocessing import StandardScaler
 
+GRID_COLS = 20
+GRID_ROWS = 10
+
+HFOV = 100.0
+VFOV = HFOV / (16/9)
+
 def sin_to_degree(pitch_pred_sin, yaw_pred_sin):
     pitch_rad = math.asin(max(-1.0, min(1.0, pitch_pred_sin)))
     yaw_rad = math.asin(max(-1.0, min(1.0, yaw_pred_sin)))
@@ -26,14 +32,6 @@ def get_degree_from_rad(pitch_rad, yaw_rad):
     return pitch, yaw
 
 def get_viewport_tiles(pitch, yaw):
-
-    GRID_COLS = 20
-    GRID_ROWS = 10
-
-    HFOV = 100.0
-    ASPECT_RATIO = 16 / 9
-
-    VFOV = HFOV / ASPECT_RATIO
 
     yaw_min = yaw - (HFOV / 2)
     yaw_max = yaw + (HFOV / 2)
@@ -97,13 +95,6 @@ def get_viewport_tiles(pitch, yaw):
     return sorted(set(tiles))
 
 def get_viewport_tiles_sin(pitch_pred_sin, yaw_pred_sin):
-    GRID_COLS = 20
-    GRID_ROWS = 10
-    HFOV = 100.0  
-    ASPECT_RATIO = 16/9
-    VIDEO_WIDTH = 1920
-    VIDEO_HEIGHT = 1080
-    VFOV = HFOV / ASPECT_RATIO  
     
     # convert sin to degrees
     pitch_rad = math.asin(max(-1.0, min(1.0, pitch_pred_sin)))
@@ -166,14 +157,6 @@ def get_viewport_tiles_sin(pitch_pred_sin, yaw_pred_sin):
     return sorted(tiles)
 
 def get_viewport_tiles_rad(pitch_rad, yaw_rad):
-
-    GRID_COLS = 20
-    GRID_ROWS = 10
-
-    HFOV = 100.0
-    ASPECT_RATIO = 16 / 9
-
-    VFOV = HFOV / ASPECT_RATIO
 
     pitch = math.degrees(pitch_rad)
     yaw = math.degrees(yaw_rad)
@@ -239,7 +222,35 @@ def get_viewport_tiles_rad(pitch_rad, yaw_rad):
 
     return sorted(set(tiles))
 
+def get_viewport_tiles_tf(pitch_deg, yaw_deg):
 
+    yaw_min = yaw_deg - HFOV / 2
+    yaw_max = yaw_deg + HFOV / 2
+
+    pitch_min = tf.maximum(pitch_deg - VFOV / 2, -90.)
+    pitch_max = tf.minimum(pitch_deg + VFOV / 2, 90.)
+
+    tile_mask = []
+
+    for row in range(GRID_ROWS):
+        for col in range(GRID_COLS):
+
+            tile_yaw_min = -180 + col * 360 / GRID_COLS
+            tile_yaw_max = -180 + (col + 1) * 360 / GRID_COLS
+
+            tile_pitch_min = -90 + row * 180 / GRID_ROWS
+            tile_pitch_max = -90 + (row + 1) * 180 / GRID_ROWS
+
+            visible = (
+                (yaw_max >= tile_yaw_min) &
+                (yaw_min <= tile_yaw_max) &
+                (pitch_max >= tile_pitch_min) &
+                (pitch_min <= tile_pitch_max)
+            )
+
+            tile_mask.append(tf.cast(visible, tf.float32))
+
+    return tf.stack(tile_mask, axis=1)
 
 def prepare_data(df, target_pitch, target_yaw):
 
@@ -309,7 +320,7 @@ def split_dataset(df, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15):
 
     return train_df, val_df, test_df
 
-def create_temporal_sequences(df, pred_time, use_v=True, kmov=False):
+def create_temporal_sequences(df, use_v=True, seq_len):
     df = df.sort_values(['v_id', 'u_id', 'playback_time']).reset_index(drop=True)
 
     if use_v:
@@ -321,11 +332,6 @@ def create_temporal_sequences(df, pred_time, use_v=True, kmov=False):
     target_cols = ['pitch_pred_sin', 'pitch_pred_cos', 
                    'yaw_pred_sin', 'yaw_pred_cos']
 
-    if kmov:
-        seq_len = 40 - pred_time
-    else:
-        seq_len = 35
-    
     x_sequences = []
     y_targets = []
 

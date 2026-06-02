@@ -1,4 +1,3 @@
-
 import numpy as np
 import pandas as pd
 import os, sys
@@ -33,7 +32,6 @@ from get_preds import get_grap_pred, get_flare_pred, get_model_pred, get_static_
 GRAPH_PATH = "./graphs/"
 
 def calculate_orthodromic_distance(new_df):
-
     error = 1 - (np.sin(new_df['pred_pitch'])*np.sin(new_df['pitch'])+np.cos(new_df['pred_pitch']) * np.cos(new_df['pitch']) * np.cos( new_df['pred_yaw'] - new_df['yaw']))
 
     mean_error = np.mean(error)
